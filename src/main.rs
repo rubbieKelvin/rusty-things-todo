@@ -1,17 +1,15 @@
-use std::io;
-
-use app::Application;
-
 mod app;
-mod ui;
+mod widgets;
+use crate::app::Application;
 
-fn main() -> io::Result<()> {
-    let mut terminal = ratatui::init();
-    terminal.clear()?;
+fn main() -> std::io::Result<()> {
+    let mut teminal = ratatui::init();
+    teminal.clear()?;
 
     let mut app = Application::new();
-    let res = app.run(terminal);
+    let result = app.run(&mut teminal);
 
     ratatui::restore();
-    return res;
+
+    return result;
 }

@@ -1,141 +1,209 @@
+use crate::widgets::input::{TextInput, TextInputState};
+use crossterm::event::{self, KeyModifiers};
+use crossterm::event::{Event, KeyCode, KeyEventKind};
+use ratatui::buffer::Buffer;
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::prelude::Widget;
+use ratatui::style::{Color, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, Borders, List, ListState, StatefulWidget};
+use ratatui::DefaultTerminal;
 use std::io;
 
-use crossterm::event::{self, Event, KeyCode, KeyEventKind};
-use ratatui::{
-    buffer::Buffer,
-    layout::Rect,
-    widgets::{ListState, Widget},
-    DefaultTerminal,
-};
-
-use crate::ui::{render_editing_ui, render_main_ui};
-
-pub enum CurrentScreen {
-    Main,
-    Editing,
-    Exiting,
-}
-
-pub struct Todo {
-    pub id: String,
-    pub text: String,
-    pub checked: bool,
+#[derive(Debug)]
+struct Todo {
+    id: String,
+    content: String,
+    checked: bool,
 }
 
 impl Todo {
-    fn new(text: &str) -> Self {
-        let id = uuid::Uuid::new_v4();
+    fn new(content: &str) -> Self {
         return Todo {
-            id: id.to_string(),
-            text: text.to_string(),
+            id: uuid::Uuid::new_v4().to_string(),
+            content: content.to_owned(),
             checked: false,
-        };
-    }
-}
-
-pub struct TodoList {
-    pub list: Vec<Todo>,
-    pub state: ListState,
-}
-
-impl TodoList {
-    fn new() -> Self {
-        return TodoList {
-            list: Vec::new(),
-            state: ListState::default(),
         };
     }
 }
 
 pub struct Application {
     running: bool,
-    pub todos: TodoList,
-    pub todo_input_text: String,
-    pub current_screen: CurrentScreen,
+    current_text_input: usize,
+    text_input_states: Vec<TextInputState>,
+    todo_list: Vec<Todo>,
+    todo_list_state: ListState,
 }
 
 impl Application {
-    pub fn new() -> Self {
+    pub fn new() -> Application {
         return Application {
             running: true,
-            todos: TodoList::new(),
-            todo_input_text: String::new(),
-            current_screen: CurrentScreen::Main,
+            current_text_input: 1,
+            todo_list: vec![],
+            todo_list_state: ListState::default(),
+            text_input_states: vec![
+                TextInputState::default()
+                    .set_placeholder("Search todo by title")
+                    .set_title("[Search]"),
+                TextInputState::default().set_placeholder("What is your name?"),
+            ],
         };
     }
 
-    fn handle_event(&mut self, event: Event) {
-        match event {
-            Event::Key(key) => {
-                if key.kind == KeyEventKind::Press {
-                    match self.current_screen {
-                        // handle main screen event
-                        CurrentScreen::Main => match key.code {
-                            KeyCode::Char('n') | KeyCode::Char('N') => {
-                                self.current_screen = CurrentScreen::Editing;
-                            }
-                            KeyCode::Char('q') | KeyCode::Char('Q') | KeyCode::Esc => {
-                                self.running = false;
-                            }
-                            KeyCode::Up => {
-                                self.todos.state.select_previous();
-                            }
-                            KeyCode::Down => {
-                                self.todos.state.select_next();
-                            }
-                            _ => {}
-                        },
-                        CurrentScreen::Editing => match key.code {
-                            KeyCode::Esc => {
-                                self.current_screen = CurrentScreen::Main;
-                                self.todo_input_text.clear();
-                            }
-                            KeyCode::Tab => {
-                                self.todo_input_text.push_str("   ");
-                            }
-                            KeyCode::Char(n) => {
-                                self.todo_input_text.push(n);
-                            }
-                            KeyCode::Delete | KeyCode::Backspace => {
-                                self.todo_input_text.pop();
-                            }
-                            KeyCode::Enter => {
-                                self.current_screen = CurrentScreen::Main;
-
-                                let todo = Todo::new(&self.todo_input_text);
-                                self.todos.list.push(todo);
-
-                                self.todo_input_text.clear();
-                            }
-                            _ => {}
-                        },
-                        _ => {}
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-
-    pub fn run(&mut self, mut terminal: DefaultTerminal) -> io::Result<()> {
+    pub fn run(&mut self, terminal: &mut DefaultTerminal) -> io::Result<()> {
         loop {
-            terminal.draw(|frame| frame.render_widget(&mut *self, frame.area()))?;
-            let e = event::read()?;
+            terminal.draw(|frame| {
+                frame.render_widget(&mut *self, frame.area());
+            })?;
 
-            self.handle_event(e);
+            let events = event::read()?;
+            self.handle_events(&events);
+
             if !self.running {
                 return Ok(());
             }
         }
     }
+
+    fn handle_events(&mut self, events: &Event) {
+        if let Event::Key(key) = *events {
+            if key.kind == KeyEventKind::Press {
+                match key.code {
+                    KeyCode::Esc => {
+                        self.running = false;
+                    }
+                    KeyCode::Tab|KeyCode::Right => {
+                        self.current_text_input =
+                            (self.current_text_input + 1) % (self.text_input_states.len() + 1);
+                    }
+                    KeyCode::BackTab|KeyCode::Left => {
+                        if self.current_text_input == 0 {
+                            self.current_text_input = self.text_input_states.len() + 1;
+                        }
+
+                        self.current_text_input -= 1
+                    }
+                    KeyCode::Char(character) => {
+                        let input_state = self.text_input_states.get_mut(self.current_text_input);
+                        if let Some(state) = input_state {
+                            state.text.push(character);
+                        }
+                    }
+                    KeyCode::Delete | KeyCode::Backspace => {
+                        let input_state = self.text_input_states.get_mut(self.current_text_input);
+                        if let Some(state) = input_state {
+                            state.text.pop();
+                        }
+                    }
+                    KeyCode::Down => {
+                        if self.current_text_input == 1 && self.todo_list.len() > 0 {
+                            self.current_text_input = self.text_input_states.len();
+                        } else if self.current_text_input == self.text_input_states.len() {
+                            self.todo_list_state.select_next();
+                        }
+                    }
+                    KeyCode::Up => {
+                        if self.todo_list.len() > 0 &&  self.todo_list_state.selected().unwrap_or(0) == 0  {
+                            self.current_text_input = self.text_input_states.len() - 1;
+                        }else if self.current_text_input == self.text_input_states.len() {
+                            self.todo_list_state.select_previous();
+                        }
+                    }
+                    KeyCode::Enter => {
+                        if self.current_text_input == 1 {
+                            self.add_todo();
+                        } else {
+                            self.toggle_todo();
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    fn toggle_todo(&mut self) {
+        if let Some(index) = self.todo_list_state.selected() {
+            if let Some(todo) = self.todo_list.get_mut(index) {
+                todo.checked = !todo.checked;
+            }
+        }
+    }
+
+    fn add_todo(&mut self) {
+        let new_todo_input_state = &mut self.text_input_states[1];
+        let text = new_todo_input_state.text.trim();
+
+        if text.len() > 0 {
+            let todo = Todo::new(text);
+            self.todo_list.push(todo);
+            new_todo_input_state.text.clear();
+        }
+    }
 }
 
 impl Widget for &mut Application {
-    fn render(self, area: Rect, buffer: &mut Buffer) {
-        match self.current_screen {
-            CurrentScreen::Main => render_main_ui(area, buffer, self),
-            CurrentScreen::Editing => render_editing_ui(area, buffer, self),
-            _ => {}
+    fn render(self, area: Rect, buf: &mut Buffer)
+    where
+        Self: Sized,
+    {
+        let app_block = Block::default()
+            .borders(Borders::ALL)
+            .title_top(Line::from(vec![" Rusty things todo ".into()]))
+            .title_bottom(Line::from(vec![
+                Span::from(" Quit "),
+                Span::from("<Escape> ").style(Style::default().fg(Color::Blue)),
+            ]));
+
+        let inner_app_lock_area = app_block.inner(area);
+        let layout = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints(vec![Constraint::Max(3), Constraint::Min(3)])
+            .split(inner_app_lock_area);
+
+        let text_top_layout = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints(vec![Constraint::Percentage(30), Constraint::Percentage(70)])
+            .split(layout[0]);
+
+        let search_input = TextInput::new();
+        let new_todo_input = TextInput::new();
+
+        // set the focused state for all inputs
+        for (index, state) in self.text_input_states.iter_mut().enumerate() {
+            if index == self.current_text_input {
+                state.set_focused(true);
+            } else {
+                state.set_focused(false);
+            }
         }
+
+        // todo list
+        let list = List::new(self.todo_list.iter().enumerate().map(|(index, todo)| {
+            Line::from(vec![
+                Span::from((index + 1).to_string()),
+                Span::from(if todo.checked { " - [x] " } else { " - [ ] " }),
+                Span::from(todo.content.clone()),
+            ])
+        }))
+        .highlight_style(
+            Style::default()
+                .bg(if self.current_text_input == self.text_input_states.len() {
+                    Color::Yellow
+                } else {
+                    Color::Gray
+                })
+                .fg(Color::Black),
+        );
+
+        if self.todo_list_state.selected().is_none() && self.todo_list.len() > 0 {
+            self.todo_list_state.select(Some(0));
+        }
+
+        app_block.render(area, buf);
+        search_input.render(text_top_layout[0], buf, &mut self.text_input_states[0]);
+        new_todo_input.render(text_top_layout[1], buf, &mut self.text_input_states[1]);
+        StatefulWidget::render(list, layout[1], buf, &mut self.todo_list_state);
     }
 }
