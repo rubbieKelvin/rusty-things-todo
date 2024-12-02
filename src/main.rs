@@ -7,6 +7,8 @@ fn main() -> std::io::Result<()> {
     teminal.clear()?;
 
     let mut app = Application::new();
+    app.read_todo_list()?;
+    
     let result = app.run(&mut teminal);
 
     ratatui::restore();
